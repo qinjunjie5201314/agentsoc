@@ -1,0 +1,119 @@
+# L4 输出兜底 · 高危工具与危险参数策略
+#
+# 三件事：
+#   1. blocked_tools：工具名黑名单（命中直接 BLOCK）
+#   2. allowlist：可选白名单（非空时只放行白名单内工具，实现"默认拒绝"）
+#   3. dangerous_patterns：危险参数模式（正则，参数或工具名命中即 BLOCK）
+#
+# 另含 C2 工具调用 Hook 用到的 tool_schemas（参数结构校验，见文件末尾）。
+
+blocked_tools:
+  - eval
+  - exec
+  - system
+  - shell
+  - os_system
+  - subprocess
+  - run_shell
+  - bash
+  - sh
+  - sudo
+  - drop_database
+  - drop_table
+  - truncate_table
+  - delete_all_records
+  - raw_sql
+
+# 空列表 = 不启用白名单模式（默认黑名单模式）
+allowlist: []
+
+dangerous_patterns:
+  - name: rm_rf
+    pattern: '\brm\s+-[a-z]*r[a-z]*f\b'
+    message: 危险删除命令 rm -rf
+  - name: drop_database
+    pattern: '\bdrop\s+(database|table)\b'
+    message: 数据库删除操作
+  - name: truncate_table
+    pattern: '\btruncate\s+table\b'
+    message: 清空数据表
+  - name: mkfs_format
+    pattern: '\b(mkfs|fdisk|dd\s+if=)\b'
+    message: 磁盘格式化/低层写操作
+  - name: fork_bomb
+    pattern: ':\s*\(\s*\)\s*\{[^}]*\|[^}]*&\s*\}'
+    message: fork 炸弹
+  - name: curl_pipe_bash
+    pattern: '\b(curl|wget)\b[^|]*\|\s*(ba)?sh\b'
+    message: 远程脚本直灌执行
+  - name: eval_exec
+    pattern: '\b(eval|exec|execvp|system|popen)\s*\('
+    message: 代码动态执行
+  - name: chmod_777
+    pattern: '\bchmod\s+(-R\s+)?777\b'
+    message: 全开放权限
+  - name: overwrite_shadow
+    pattern: '>\s*/etc/(passwd|shadow|sudoers)'
+    message: 覆写系统关键文件
+  - name: select_star
+    pattern: '\bselect\s+\*\s+from\b'
+    message: 全表查询（疑似数据外泄）
+  - name: delete_from
+    pattern: '\bdelete\s+from\s+\w+'
+    message: 删除表记录
+  - name: write_sensitive_path
+    pattern: '>\s*(/etc/|/root/|/boot/|C:\\Windows)'
+    message: 覆写敏感系统路径
+  - name: credential_access
+    pattern: '(\.ssh/(id_rsa|id_ed25519|id_ecdsa)|\.aws/credentials|\.kube/config|/etc/shadow|[^\s"]{0,40}\.(pem|p12|jks|keystore))'
+    message: 访问凭据 / 私钥文件
+
+# ---- C2 工具调用 Hook：参数结构校验（JSON Schema 子集） ----
+# 仅对列出的工具做结构校验；未列出的工具跳过 schema 检查。
+tool_schemas:
+  search:
+    type: object
+    properties:
+      query:
+        type: string
+      top_k:
+        type: integer
+    required: [query]
+  read_file:
+    type: object
+    properties:
+      path:
+        type: string
+    required: [path]
+  write_file:
+    type: object
+    properties:
+      path:
+        type: string
+      content:
+        type: string
+    required: [path, content]
+  get_weather:
+    type: object
+    properties:
+      city:
+        type: string
+    required: [city]
+  send_email:
+    type: object
+    properties:
+      to:
+        type: string
+      subject:
+        type: string
+      body:
+        type: string
+    required: [to, body]
+  query_database:
+    type: object
+    properties:
+      sql:
+        type: string
+      limit:
+        type: integer
+    required: [sql]

@@ -1,0 +1,61 @@
+name: agentsoc
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 需要本地模型时改为 1（镜像会变大 ~2GB）
+        INSTALL_CLASSIFIER: ${INSTALL_CLASSIFIER:-0}
+    container_name: agentsoc-api
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - APP_NAME=AgentSoc
+      - APP_ENV=${APP_ENV:-dev}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DATABASE_URL=sqlite:////app/data/agentsoc.db
+      - POLICY_DIR=/app/policies
+      # 判别模型：disabled（默认，纯规则）/ local（本地模型）/ remote
+      - CLASSIFIER_MODE=${CLASSIFIER_MODE:-disabled}
+      - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.7}
+      - CLASSIFIER_MODEL_NAME=${CLASSIFIER_MODEL_NAME:-protectai/deberta-v3-base-prompt-injection-v2}
+      - CLASSIFIER_DEVICE=${CLASSIFIER_DEVICE:-cpu}
+      - CLASSIFIER_CACHE_DIR=/app/model-cache
+      # HuggingFace 镜像源（内网需要时设，如 https://hf-mirror.com）
+      - HF_ENDPOINT=${HF_ENDPOINT:-}
+      # 审计
+      - AUDIT_ENABLED=${AUDIT_ENABLED:-true}
+      - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-90}
+      # 管理端点鉴权（设了才启用）
+      - API_KEY=${API_KEY:-}
+    volumes:
+      - agentsoc-data:/app/data
+      - agentsoc-logs:/app/logs
+      - agentsoc-model:/app/model-cache
+      # 挂载本机策略目录，改 YAML 即热更新（无需重建镜像）
+      - ./policies:/app/policies:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentsoc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - agentsoc-redis:/data
+    restart: unless-stopped
+    # M1 暂不依赖，M2 启用（策略缓存 + 速率限制）
+
+volumes:
+  agentsoc-data:
+  agentsoc-logs:
+  agentsoc-model:
+  agentsoc-redis:

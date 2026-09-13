@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 测试与覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Lint
+.ruff_cache/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 本地数据
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+.env
+
+# NL 转策略生成的临时策略文件（C4 演示落盘，不应提交）
+policies/nl_*.yaml
+
+# 系统
+.DS_Store
+Thumbs.db
