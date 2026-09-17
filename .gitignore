@@ -44,3 +44,7 @@ policies/nl_*.yaml
 # 系统
 .DS_Store
 Thumbs.db
+
+# Go 编译产物（桌面代理客户端）
+desktop-proxy/agentsoc-proxy.exe
+*.exe
