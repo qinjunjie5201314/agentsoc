@@ -17,12 +17,22 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DATABASE_URL=sqlite:////app/data/agentsoc.db
       - POLICY_DIR=/app/policies
-      # 判别模型：disabled（默认，纯规则）/ local（本地模型）/ remote
+      # ===== 真实 LLM 后端透传（阶段 3 试点）=====
+      - LLM_BACKEND=${LLM_BACKEND:-mock}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # ===== 判别模型：disabled（默认，纯规则）/ local（本地模型）/ remote =====
       - CLASSIFIER_MODE=${CLASSIFIER_MODE:-disabled}
       - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.7}
       - CLASSIFIER_MODEL_NAME=${CLASSIFIER_MODEL_NAME:-protectai/deberta-v3-base-prompt-injection-v2}
       - CLASSIFIER_DEVICE=${CLASSIFIER_DEVICE:-cpu}
       - CLASSIFIER_CACHE_DIR=/app/model-cache
+      # 远程判别模型（CLASSIFIER_MODE=remote 时生效）
+      - CLASSIFIER_REMOTE_BASE_URL=${CLASSIFIER_REMOTE_BASE_URL:-}
+      - CLASSIFIER_REMOTE_API_KEY=${CLASSIFIER_REMOTE_API_KEY:-}
+      - CLASSIFIER_REMOTE_MODEL=${CLASSIFIER_REMOTE_MODEL:-gpt-4o-mini}
+      - CLASSIFIER_REMOTE_TIMEOUT=${CLASSIFIER_REMOTE_TIMEOUT:-5.0}
       # HuggingFace 镜像源（内网需要时设，如 https://hf-mirror.com）
       - HF_ENDPOINT=${HF_ENDPOINT:-}
       # 审计
