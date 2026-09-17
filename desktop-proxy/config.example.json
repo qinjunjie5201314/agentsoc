@@ -1,5 +1,8 @@
 {
   "listen": "127.0.0.1:8899",
   "upstream": "http://172.17.0.200:8000",
-  "log_level": "info"
+  "log_level": "info",
+  "mode": "explicit",
+  "target_domains": ["new-api.gaojihealth.cn", "api.openai.com", "api.anthropic.com"],
+  "ca_dir": "certs"
 }
