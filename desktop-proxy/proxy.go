@@ -16,6 +16,7 @@ type Proxy struct {
 	cfg      *Config
 	upstream *url.URL
 	client   *http.Client
+	stats    *Stats // 可选的本地运行状态（看板用）
 }
 
 func NewProxy(cfg *Config) (*Proxy, error) {
@@ -29,6 +30,7 @@ func NewProxy(cfg *Config) (*Proxy, error) {
 	return &Proxy{
 		cfg:      cfg,
 		upstream: u,
+		stats:    nil,
 		client: &http.Client{
 			Timeout: 0,
 			Transport: &http.Transport{
@@ -82,6 +84,27 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+
+	// 拦截/错误响应：读全量 body 以解析命中规则信息，写入看板
+	if resp.StatusCode >= 400 && !isStream {
+		b, _ := io.ReadAll(resp.Body)
+		if p.stats != nil {
+			p.stats.RecordResponse(r, resp, b)
+		}
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		w.Write(b)
+		return
+	}
+
+	// 正常响应：仅记录概要（不缓冲大响应体）
+	if p.stats != nil {
+		p.stats.RecordResponse(r, resp, nil)
+	}
 
 	for k, vv := range resp.Header {
 		for _, v := range vv {

@@ -21,6 +21,8 @@ type Config struct {
 	TargetDomains []string `json:"target_domains,omitempty"`
 	// CADir 自签根证书存放目录
 	CADir string `json:"ca_dir,omitempty"`
+	// Dashboard 看板监听地址（仅 localhost；留空关闭看板）
+	Dashboard string `json:"dashboard,omitempty"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -32,6 +34,7 @@ func DefaultConfig() *Config {
 		Mode:          "explicit",
 		TargetDomains: []string{"new-api.gaojihealth.cn", "api.openai.com", "api.anthropic.com"},
 		CADir:         "certs",
+		Dashboard:     "127.0.0.1:8890",
 	}
 }
 
@@ -64,6 +67,9 @@ func LoadConfig(path, listenArg, upstreamArg string) (*Config, error) {
 		}
 		if fileCfg.CADir != "" {
 			cfg.CADir = fileCfg.CADir
+		}
+		if fileCfg.Dashboard != "" {
+			cfg.Dashboard = fileCfg.Dashboard
 		}
 	}
 

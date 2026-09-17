@@ -2,7 +2,7 @@
 ; 生成标准 Windows 安装包，双击安装，自动注册服务
 
 #define MyAppName "AgentSoc Desktop Proxy"
-#define MyAppVersion "0.3.0"
+#define MyAppVersion "0.4.0"
 #define MyAppExeName "agentsoc-proxy.exe"
 
 [Setup]
@@ -23,6 +23,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
 Source: "agentsoc-proxy.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dashboard.html"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
 ; 安装完成后一键注册服务（-setup 会复制自己、写配置、注册并启动服务）

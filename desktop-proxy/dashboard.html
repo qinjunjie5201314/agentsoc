@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentSoc 桌面代理 · 实时看板</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#ffffff; --ink:#1f2733; --sub:#6b7686;
+    --line:#e6eaf1; --green:#1f9d55; --red:#d9352b; --amber:#c47d12;
+    --blue:#2563eb; --shadow:0 1px 3px rgba(20,30,50,.08),0 6px 18px rgba(20,30,50,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);padding:20px;}
+  .wrap{max-width:1080px;margin:0 auto}
+  header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px}
+  h1{font-size:20px;margin:0;font-weight:700}
+  .sub{color:var(--sub);font-size:13px;margin-top:2px}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;background:#eef2fb;color:var(--blue);font-weight:600}
+  .grid{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;margin-bottom:16px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)}
+  .card h2{font-size:14px;margin:0 0 12px;color:var(--sub);font-weight:600;letter-spacing:.02em}
+  .conn{display:flex;align-items:center;gap:14px}
+  .dot{width:16px;height:16px;border-radius:50%;flex:none;box-shadow:0 0 0 4px rgba(31,157,85,.15)}
+  .dot.ok{background:var(--green)} .dot.bad{background:var(--red);box-shadow:0 0 0 4px rgba(217,53,43,.15)}
+  .conn .state{font-size:18px;font-weight:700}
+  .kv{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .kv:last-child{border-bottom:none}
+  .kv span:first-child{color:var(--sub)}
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .metric{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;box-shadow:var(--shadow)}
+  .metric .n{font-size:26px;font-weight:800;line-height:1}
+  .metric .l{font-size:12px;color:var(--sub);margin-top:6px}
+  .metric.block .n{color:var(--red)} .metric.pass .n{color:var(--green)}
+  .metric.err .n{color:var(--amber)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--sub);font-weight:600;background:#fafbfe;position:sticky;top:0}
+  td.wrap{white-space:normal;max-width:280px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600}
+  .pill.block{background:#fdecea;color:var(--red)}
+  .pill.pass{background:#e8f6ee;color:var(--green)}
+  .pill.error{background:#fdf3e2;color:var(--amber)}
+  .scroll{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:12px}
+  .foot{color:var(--sub);font-size:12px;margin-top:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  .refresh{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer}
+  .empty{color:var(--sub);text-align:center;padding:24px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>AgentSoc 桌面代理 · 实时看板</h1>
+      <div class="sub">本机防护状态 · 版本 <span id="ver">—</span> · 模式 <span class="badge" id="mode">—</span></div>
+    </div>
+    <div class="sub">主机：<b id="host">—</b></div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>代理联通状态</h2>
+      <div class="conn">
+        <div class="dot" id="dot"></div>
+        <div>
+          <div class="state" id="state">检测中…</div>
+          <div class="sub" id="latency" style="margin-top:2px"></div>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <div class="kv"><span>上游网关</span><b id="upstream">—</b></div>
+        <div class="kv"><span>最近探活</span><b id="lastcheck">—</b></div>
+        <div class="kv"><span>说明</span><b id="connerr">—</b></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>本机信息</h2>
+      <div class="kv"><span>主机名称</span><b id="host2">—</b></div>
+      <div class="kv"><span>运行模式</span><b id="mode2">—</b></div>
+      <div class="kv"><span>代理版本</span><b id="ver2">—</b></div>
+      <div class="kv"><span>启动时间</span><b id="start">—</b></div>
+      <div class="kv"><span>已运行</span><b id="uptime">—</b></div>
+    </div>
+  </div>
+
+  <div class="metrics" style="margin-bottom:16px">
+    <div class="metric"><div class="n" id="m-total">0</div><div class="l">总请求</div></div>
+    <div class="metric block"><div class="n" id="m-block">0</div><div class="l">命中规则拦截</div></div>
+    <div class="metric pass"><div class="n" id="m-pass">0</div><div class="l">放行通过</div></div>
+    <div class="metric err"><div class="n" id="m-err">0</div><div class="l">网关错误</div></div>
+  </div>
+
+  <div class="card" style="padding:0">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0">命中规则 / 请求流水</h2>
+      <button class="refresh" onclick="load()">立即刷新</button>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>时间</th><th>动作</th><th>方法</th><th>路径</th>
+          <th>风险</th><th>评分</th><th>命中规则</th><th>策略</th><th>说明</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="9" class="empty">暂无数据，发送请求后将在此显示</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>看板仅监听本机 <code>127.0.0.1</code>，不对外暴露 · 数据驻留本机内存</span>
+    <span id="updated">—</span>
+  </div>
+</div>
+
+<script>
+function fmtTime(tsMs){
+  if(!tsMs) return "—";
+  var d=new Date(tsMs);
+  var p=function(n){return (n<10?"0":"")+n;};
+  return p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds());
+}
+function fmtDur(ms){
+  if(!ms) return "—";
+  var s=Math.floor(ms/1000);
+  if(s<60) return s+" 秒";
+  if(s<3600) return Math.floor(s/60)+" 分 "+ (s%60) +" 秒";
+  return Math.floor(s/3600)+" 小时 "+ Math.floor((s%3600)/60) +" 分";
+}
+function actionPill(a){
+  if(a==="block") return '<span class="pill block">拦截</span>';
+  if(a==="error") return '<span class="pill error">错误</span>';
+  return '<span class="pill pass">通过</span>';
+}
+function esc(s){return (s||"").replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
+
+function render(d){
+  document.getElementById("ver").textContent=d.version||"—";
+  document.getElementById("ver2").textContent=d.version||"—";
+  document.getElementById("mode").textContent=d.mode||"—";
+  document.getElementById("mode2").textContent=d.mode||"—";
+  document.getElementById("host").textContent=d.hostname||"—";
+  document.getElementById("host2").textContent=d.hostname||"—";
+  document.getElementById("upstream").textContent=d.upstream||"—";
+  document.getElementById("start").textContent=fmtTime(d.start_time);
+  document.getElementById("uptime").textContent=fmtDur(d.now-d.start_time);
+
+  var c=d.connectivity||{};
+  var dot=document.getElementById("dot");
+  dot.className="dot "+(c.ok?"ok":"bad");
+  document.getElementById("state").textContent=c.ok?"已联通":"断开";
+  document.getElementById("latency").textContent=c.latency_ms?("延迟 "+c.latency_ms+" ms"):"";
+  document.getElementById("lastcheck").textContent=fmtTime(c.last_check);
+  document.getElementById("connerr").textContent=c.error||"正常";
+
+  document.getElementById("m-total").textContent=d.stats.total;
+  document.getElementById("m-block").textContent=d.stats.blocked;
+  document.getElementById("m-pass").textContent=d.stats.passed;
+  document.getElementById("m-err").textContent=d.stats.errors;
+
+  var rows=document.getElementById("rows");
+  if(!d.recent||d.recent.length===0){
+    rows.innerHTML='<tr><td colspan="9" class="empty">暂无数据，发送请求后将在此显示</td></tr>';
+  }else{
+    rows.innerHTML=d.recent.map(function(ev){
+      return "<tr>"+
+        "<td>"+fmtTime(ev.ts)+"</td>"+
+        "<td>"+actionPill(ev.action)+"</td>"+
+        "<td>"+esc(ev.method)+"</td>"+
+        "<td>"+esc(ev.path)+"</td>"+
+        "<td>"+esc(ev.risk||"—")+"</td>"+
+        "<td>"+(ev.score!=null?ev.score:"—")+"</td>"+
+        "<td>"+(ev.rules&&ev.rules.length?esc(ev.rules.join(", ")):"—")+"</td>"+
+        "<td>"+esc(ev.policy_ver||"—")+"</td>"+
+        "<td class='wrap'>"+esc(ev.message||"—")+"</td>"+
+      "</tr>";
+    }).join("");
+  }
+  document.getElementById("updated").textContent="更新于 "+fmtTime(d.now);
+}
+
+function load(){
+  fetch("/api").then(function(r){return r.json();}).then(render).catch(function(e){
+    var dot=document.getElementById("dot");dot.className="dot bad";
+    document.getElementById("state").textContent="看板离线";
+    document.getElementById("connerr").textContent="无法读取 /api: "+e;
+  });
+}
+load();
+setInterval(load,2000);
+</script>
+</body>
+</html>

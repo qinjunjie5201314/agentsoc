@@ -3,6 +3,7 @@
 //   - explicit：显式代理，监听 HTTP 端口，工具把 base_url 指向这里
 //   - transparent：透明 MITM，监听 443，改 hosts + 自签证书，工具零改动
 // 支持以 Windows 服务方式运行（install/uninstall 子命令）。
+// 内置本地看板（默认 http://127.0.0.1:8890），展示联通状态/主机名/命中规则。
 package main
 
 import (
@@ -16,18 +17,19 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-var version = "0.3.0"
+var version = "0.4.0"
 
 func main() {
 	var (
-		listenAddr = flag.String("listen", "127.0.0.1:8899", "本地监听地址（显式模式）")
-		upstream   = flag.String("upstream", "", "上游 AgentSoc 网关地址")
-		cfgFile    = flag.String("config", "config.json", "配置文件路径")
-		mode       = flag.String("mode", "", "运行模式：explicit / transparent")
-		install    = flag.Bool("install", false, "注册为 Windows 服务")
-		uninstall  = flag.Bool("uninstall", false, "卸载 Windows 服务")
+		listenAddr    = flag.String("listen", "127.0.0.1:8899", "本地监听地址（显式模式）")
+		upstream      = flag.String("upstream", "", "上游 AgentSoc 网关地址")
+		cfgFile       = flag.String("config", "config.json", "配置文件路径")
+		mode          = flag.String("mode", "", "运行模式：explicit / transparent")
+		install       = flag.Bool("install", false, "注册为 Windows 服务")
+		uninstall     = flag.Bool("uninstall", false, "卸载 Windows 服务")
 		setupUpstream = flag.String("setup", "", "一键安装：复制到程序目录 + 写配置 + 注册并启动服务（参数为上游网关地址）")
-		showVer    = flag.Bool("version", false, "显示版本")
+		showVer       = flag.Bool("version", false, "显示版本")
+		dashboard     = flag.String("dashboard", "127.0.0.1:8890", "看板监听地址（留空关闭）")
 	)
 	flag.Parse()
 
@@ -61,6 +63,7 @@ func main() {
 			log.Fatalf("一键安装失败（需管理员权限）: %v", err)
 		}
 		fmt.Println("✅ 安装完成！AgentSoc 桌面代理已作为 Windows 服务运行。")
+		fmt.Println("   看板地址: http://127.0.0.1:8890")
 		return
 	}
 
@@ -70,6 +73,9 @@ func main() {
 	}
 	if *mode != "" {
 		cfg.Mode = *mode
+	}
+	if *dashboard != "" {
+		cfg.Dashboard = *dashboard
 	}
 
 	if cfg.Upstream == "" {
@@ -114,16 +120,25 @@ func runForeground(cfg *Config) {
 }
 
 func runExplicit(cfg *Config) error {
+	stats := NewStats(cfg)
+	if cfg.Dashboard != "" {
+		go stats.ServeDashboard(cfg.Dashboard)
+	}
 	proxy, err := NewProxy(cfg)
 	if err != nil {
 		return fmt.Errorf("初始化代理失败: %w", err)
 	}
+	proxy.stats = stats
 	log.Printf("  本地监听: %s", cfg.Listen)
 	log.Printf("  工具接入: 把 base_url 改为 http://%s", cfg.Listen)
 	return proxy.Run()
 }
 
 func runTransparent(cfg *Config) error {
+	stats := NewStats(cfg)
+	if cfg.Dashboard != "" {
+		go stats.ServeDashboard(cfg.Dashboard)
+	}
 	ca, err := NewCertAuthority(cfg.CADir)
 	if err != nil {
 		return fmt.Errorf("初始化 CA 失败: %w", err)
@@ -144,6 +159,7 @@ func runTransparent(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("初始化 MITM 代理失败: %w", err)
 	}
+	mitm.proxy.stats = stats
 	log.Printf("透明代理已启动，拦截域名: %v", cfg.TargetDomains)
 	return mitm.Run()
 }
