@@ -70,43 +70,51 @@ agentsoc-proxy.exe -mode transparent -upstream http://172.17.0.200:8000
 
 ## 五、分发（集团域控）
 
-- 单文件 `agentsoc-proxy.exe`，通过集团软件分发系统静默下发
-- 配合统一配置中心下发 `config.json`
-- 透明模式需以管理员权限运行，可注册为 Windows 服务开机自启
+**推荐：一键安装包**（`AgentSoc-Proxy-Setup.exe`）
 
-### 注册为 Windows 服务（开机自启）
+双击即完成全部配置（安装 → 写配置 → 注册服务 → 启动），终端零配置。详见 `安装包使用说明.md`。
+
+```cmd
+# 静默安装（域控批量分发）
+AgentSoc-Proxy-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+```
+
+### 手动方式（开发者）
 
 ```bash
 # 注册服务（需管理员权限）
 agentsoc-proxy.exe -install
 
+# 一键安装到程序目录 + 注册服务 + 启动
+agentsoc-proxy.exe -setup http://172.17.0.200:8000
+
 # 卸载服务
 agentsoc-proxy.exe -uninstall
 ```
 
-服务注册后：
-- 服务名 `AgentSocProxy`，开机自动启动
-- 以服务运行时从 exe 同目录读 `config.json`
-- 停止服务时自动清理透明模式写入的 hosts 条目
-
 ### 域控静默下发流程
 
-1. 分发 `agentsoc-proxy.exe` + `config.json` 到目标目录（如 `C:\Program Files\AgentSoc\`）
-2. 以管理员权限执行 `agentsoc-proxy.exe -install` 注册服务
+1. 用 Inno Setup 生成 `AgentSoc-Proxy-Setup.exe`（内含网关地址）
+2. 通过 SCCM / 域控脚本批量下发，静默安装
 3. 服务开机自启，终端零感知
 
 ## 六、项目结构
 
 ```
 desktop-proxy/
-├── main.go          # 入口（两种模式 + 服务注册）
+├── main.go          # 入口（两种模式 + 服务注册 + 一键安装）
 ├── config.go        # 配置加载
 ├── proxy.go         # 代理核心（转发 + 流式透传）
 ├── hosts.go         # hosts 自动管理
 ├── cert.go          # 自签 CA + 动态签发
 ├── mitm.go          # 443 透明 MITM 代理
 ├── service.go       # Windows 服务注册
+├── setup.go         # 一键安装（-setup）
+├── installer.iss    # Inno Setup 安装脚本
+├── agentsoc-proxy.exe        # 编译产物
+├── AgentSoc-Proxy-Setup.exe  # 一键安装包
 ├── config.example.json
+├── 安装包使用说明.md
 ├── 透明代理合规授权申请.md
 ├── 集团推广-桌面透明代理方案.md
 └── README.md

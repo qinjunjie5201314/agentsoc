@@ -26,6 +26,7 @@ func main() {
 		mode       = flag.String("mode", "", "运行模式：explicit / transparent")
 		install    = flag.Bool("install", false, "注册为 Windows 服务")
 		uninstall  = flag.Bool("uninstall", false, "卸载 Windows 服务")
+		setupUpstream = flag.String("setup", "", "一键安装：复制到程序目录 + 写配置 + 注册并启动服务（参数为上游网关地址）")
 		showVer    = flag.Bool("version", false, "显示版本")
 	)
 	flag.Parse()
@@ -46,6 +47,20 @@ func main() {
 		if err := uninstallService(); err != nil {
 			log.Fatalf("卸载服务失败（需管理员权限）: %v", err)
 		}
+		return
+	}
+
+	// 一键安装
+	if *setupUpstream != "" {
+		up := *setupUpstream
+		m := "explicit"
+		if *mode != "" {
+			m = *mode
+		}
+		if err := runSetup(up, m); err != nil {
+			log.Fatalf("一键安装失败（需管理员权限）: %v", err)
+		}
+		fmt.Println("✅ 安装完成！AgentSoc 桌面代理已作为 Windows 服务运行。")
 		return
 	}
 
