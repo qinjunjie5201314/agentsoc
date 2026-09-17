@@ -17,3 +17,15 @@ def test_settings_is_dev():
 def test_settings_is_sqlite():
     """SQLite URL 判断。"""
     assert settings.is_sqlite is True
+
+
+def test_settings_llm_backend_default():
+    """阶段 3：默认后端是 mock。"""
+    assert settings.llm_backend == "mock"
+
+
+def test_settings_remote_classifier_defaults():
+    """阶段 3：远程判别模型默认配置可读。"""
+    assert settings.classifier_remote_base_url == ""
+    assert settings.classifier_remote_model == "gpt-4o-mini"
+    assert settings.classifier_remote_timeout == 5.0

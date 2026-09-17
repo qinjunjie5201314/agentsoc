@@ -29,7 +29,7 @@ from app.audit.models import RiskAction, RiskLevel, SourceType
 from app.detection.isolate import tag_messages
 from app.detection.normalize import normalize
 from app.detection.pipeline import DetectionPipeline
-from app.proxy.mock_llm import MockLLM
+from app.proxy.llm_backend import MockLLMBackend
 from app.proxy.schemas import (
     AgentsentryErrorBody,
     ChatCompletionRequest,
@@ -137,12 +137,14 @@ def _process_tool_calls(
     *,
     guard: ToolGuard,
     executor: DryRunToolExecutor,
-    llm: MockLLM,
+    backend: Any,
     model: str,
     messages: list[dict[str, Any]],
     first_response: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """C2 核心：guard 工具调用 → 执行/拦截 → 回灌 → 第二轮回复。
+
+    ``backend`` 是放行后的真实 LLM 后端（有 chat_completion 方法）。
 
     Returns:
         (最终响应, C2 元信息)。无工具调用时原样返回 (first_response, None)。
@@ -197,7 +199,7 @@ def _process_tool_calls(
 
     # 第二轮：把 tool 结果（含拦截错误）回灌，让模型给出解释性回复
     followup_messages = [*messages, assistant_msg, *tool_msgs]
-    followup = llm.chat_completion(model=model, messages=followup_messages)
+    followup = backend.chat_completion(model=model, messages=followup_messages)
 
     meta: dict[str, Any] = {
         **guard_result.to_dict(),
@@ -215,10 +217,15 @@ def create_proxy_router(
     executor: DryRunToolExecutor | None = None,
     auto_handle_tools: bool = True,
     audit: Any | None = None,
+    backend: Any | None = None,
 ) -> APIRouter:
-    """创建 Proxy 路由。Pipeline / Guard / Executor / AuditLogger 均可注入，便于测试和热更新。"""
+    """创建 Proxy 路由。Pipeline / Guard / Executor / AuditLogger / LLM backend 均可注入。
+
+    ``backend`` 是放行后真正调用的 LLM 后端（阶段 3 试点接内网网关时传入
+    OpenAICompatBackend；默认 MockLLMBackend 回显）。
+    """
     pipe = pipeline or DetectionPipeline.from_yaml("policies/builtin_rules.yaml")
-    llm = MockLLM()
+    llm_backend = backend or MockLLMBackend()
     guard = tool_guard or ToolGuard()
     ex = executor or DryRunToolExecutor()
     audit_logger = audit  # 可空：审计关闭时跳过落库
@@ -289,16 +296,17 @@ def create_proxy_router(
             # M1 简化：confirm 也按 block 处理
             return _block_response(result, ERR_REQUIRES_CONFIRM, http_status=400)
 
-        # ---- allow：透传到 mock LLM ----
-        # 先探测本轮是否会产生工具调用（mock 是确定性的，探测无副作用）
-        probe = llm.chat_completion(model=req.model, messages=messages, tools=req.tools)
+        # ---- allow：透传到 LLM 后端（mock 或内网网关） ----
+        # 先探测本轮是否会产生工具调用（mock 是确定性的，真实后端此探测会多一次调用；
+        # 试点阶段为保持 C2 工具拦截逻辑一致，沿用探测，M2 再优化为流式增量）
+        probe = llm_backend.chat_completion(model=req.model, messages=messages, tools=req.tools)
         has_tool_calls = bool(extract_tool_calls(probe, protocol="openai"))
 
         if auto_handle_tools and has_tool_calls:
             final, tools_meta = _process_tool_calls(
                 guard=guard,
                 executor=ex,
-                llm=llm,
+                backend=llm_backend,
                 model=req.model,
                 messages=messages,
                 first_response=probe,
@@ -354,7 +362,7 @@ def create_proxy_router(
 
         if req.stream:
             return StreamingResponse(
-                _sse_iter(llm, req, _summary_payload(result, messages)),
+                _sse_iter(llm_backend, req, _summary_payload(result, messages)),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
@@ -366,9 +374,9 @@ def create_proxy_router(
     return router
 
 
-async def _sse_iter(llm: MockLLM, req: ChatCompletionRequest, agentsentry_meta: dict) -> Any:
-    """SSE 事件流。"""
-    for chunk in llm.stream_chat_completion(
+async def _sse_iter(backend: Any, req: ChatCompletionRequest, agentsentry_meta: dict) -> Any:
+    """SSE 事件流。``backend`` 需提供 stream_chat_completion。"""
+    for chunk in backend.stream_chat_completion(
         model=req.model, messages=req.messages, tools=req.tools
     ):
         # 首个含 choices 的 chunk 附加 agentsentry 元信息

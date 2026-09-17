@@ -29,6 +29,7 @@ from app.proxy.demo_nl_page import create_nl_demo_router
 from app.proxy.demo_page import create_demo_router
 from app.proxy.demo_policy_page import create_policy_demo_router
 from app.proxy.demo_tool_page import create_tool_demo_router
+from app.proxy.llm_backend import build_backend
 from app.proxy.openai_proxy import create_proxy_router
 from app.proxy.tool_hook import ToolGuard
 from app.proxy.tool_routes import create_tool_router
@@ -131,6 +132,7 @@ async def info() -> dict:
         "version": __version__,
         "env": settings.app_env,
         "classifier_mode": settings.classifier_mode,
+        "llm_backend": settings.llm_backend,
         "policy_dir": str(settings.policy_dir),
         "policy_revision": _registry.revision,
         "policy_version": _registry.version,
@@ -177,7 +179,13 @@ def _build_classifier():
                 kwargs["cache_dir"] = settings.classifier_cache_dir
             return get_classifier("local", **kwargs)
         if mode == "remote":
-            return get_classifier("remote")
+            return get_classifier(
+                "remote",
+                base_url=settings.classifier_remote_base_url,
+                api_key=settings.classifier_remote_api_key,
+                model=settings.classifier_remote_model,
+                timeout=settings.classifier_remote_timeout,
+            )
         return get_classifier("disabled")
     except Exception as exc:  # noqa: BLE001 - 模型加载失败降级，不阻断服务
         logger.warning("判别模型初始化失败 (%s)，降级为 disabled（纯规则引擎）: %s", mode, exc)
@@ -194,7 +202,28 @@ _pipeline: DetectionPipeline = DetectionPipeline(
 )
 _tool_guard = ToolGuard(registry=_registry)
 
-app.include_router(create_proxy_router(_pipeline, tool_guard=_tool_guard, audit=_audit))
+
+def _build_backend():
+    """按 settings.llm_backend 构建放行后的 LLM 后端；失败降级到 mock（不阻断服务）。"""
+    try:
+        return build_backend(
+            settings.llm_backend,
+            base_url=settings.openai_base_url,
+            api_key=settings.openai_api_key,
+            model=settings.llm_model,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM 后端初始化失败 (%s)，降级为 mock: %s", settings.llm_backend, exc)
+        return build_backend("mock")
+
+
+_llm_backend = _build_backend()
+if settings.llm_backend != "mock":
+    logger.info("LLM 后端 = %s · base_url=%s · model=%s", settings.llm_backend, settings.openai_base_url, settings.llm_model)
+
+app.include_router(
+    create_proxy_router(_pipeline, tool_guard=_tool_guard, audit=_audit, backend=_llm_backend)
+)
 app.include_router(create_tool_router(guard=_tool_guard))
 # 管理/审计端点加鉴权（设了 API_KEY 才生效；未设则开放，方便 dev 调试）
 app.include_router(

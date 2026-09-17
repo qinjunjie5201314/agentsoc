@@ -33,8 +33,10 @@ cd /path/to/agentsentry && make run
 
 # 2. 把 Claude Code 的 API 指向 AgentSoc
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8000"
-# 注意：AgentSoc 需要能转发到真实 Anthropic，M1 阶段内置 mock LLM，
-# 拦截逻辑在 mock 之前生效，所以即使不配真实 key 也能演示"拦截"。
+# 注意：AgentSoc 默认用内置 mock LLM（回显），拦截逻辑在 mock 之前生效，
+# 所以即使不配真实后端也能演示"拦截"。
+# 若要真实使用（阶段 3 试点），在 .env 配 LLM_BACKEND=openai 指向内网模型网关，
+# 详见 docs/阶段3-真实Agent接入试点.md
 
 # 3. 正常使用 Claude Code
 claude
