@@ -23,6 +23,10 @@ type Config struct {
 	CADir string `json:"ca_dir,omitempty"`
 	// Dashboard 看板监听地址（仅 localhost；留空关闭看板）
 	Dashboard string `json:"dashboard,omitempty"`
+	// AgentName 终端显示别名（可选；留空则中心显示主机名）
+	AgentName string `json:"agent_name,omitempty"`
+	// ReportIntervalSec 向中心上报心跳的间隔秒数（默认 60；负数关闭上报）
+	ReportIntervalSec int `json:"report_interval_sec,omitempty"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -35,6 +39,8 @@ func DefaultConfig() *Config {
 		TargetDomains: []string{"new-api.gaojihealth.cn", "api.openai.com", "api.anthropic.com"},
 		CADir:         "certs",
 		Dashboard:     "127.0.0.1:8890",
+		// 默认每 60s 向中心上报一次心跳（中心超过 180s 未收到判离线）
+		ReportIntervalSec: 60,
 	}
 }
 
@@ -70,6 +76,13 @@ func LoadConfig(path, listenArg, upstreamArg string) (*Config, error) {
 		}
 		if fileCfg.Dashboard != "" {
 			cfg.Dashboard = fileCfg.Dashboard
+		}
+		if fileCfg.AgentName != "" {
+			cfg.AgentName = fileCfg.AgentName
+		}
+		// 0 = 未配置（沿用默认 60s）；负数 = 显式关闭上报
+		if fileCfg.ReportIntervalSec != 0 {
+			cfg.ReportIntervalSec = fileCfg.ReportIntervalSec
 		}
 	}
 

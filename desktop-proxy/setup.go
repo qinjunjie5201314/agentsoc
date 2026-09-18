@@ -26,6 +26,8 @@ func runSetup(upstream, mode string) error {
   "mode": %q,
   "upstream": %q,
   "dashboard": "127.0.0.1:8890",
+  "agent_name": "",
+  "report_interval_sec": 60,
   "target_domains": ["new-api.gaojihealth.cn", "api.openai.com", "api.anthropic.com"],
   "ca_dir": "certs"
 }

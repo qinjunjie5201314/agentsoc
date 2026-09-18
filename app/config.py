@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     audit_enabled: bool = True
     audit_retention_days: int = 90
 
+    # ---- Fleet：多终端总览看板（桌面代理心跳上报驱动）----
+    #   终端每 fleet_report_interval 秒 POST 一次快照到 /v1/fleet/report；
+    #   超过 fleet_offline_after 秒未上报即判定为离线（默认 180s = 3 x 60s）。
+    fleet_enabled: bool = True
+    fleet_report_interval: int = 60
+    fleet_offline_after: int = 180
+    # 终端状态保留上限（内存表最大条目数，超出按最久未上报淘汰）
+    fleet_max_agents: int = 2000
+
     # 安全：管理端点鉴权（设了 API_KEY 后，/v1/policy/*、/v1/audit/* 需带 X-API-Key 头）
     api_key: str = ""
 

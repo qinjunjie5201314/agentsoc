@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-var version = "0.4.0"
+var version = "0.5.0"
 
 func main() {
 	var (
@@ -74,9 +74,12 @@ func main() {
 	if *mode != "" {
 		cfg.Mode = *mode
 	}
-	if *dashboard != "" {
-		cfg.Dashboard = *dashboard
-	}
+	// 仅当用户显式传入 -dashboard 时覆盖配置文件；flag 的默认值不覆盖
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "dashboard" {
+			cfg.Dashboard = *dashboard
+		}
+	})
 
 	if cfg.Upstream == "" {
 		fmt.Fprintln(os.Stderr, "错误：未配置上游网关地址。")

@@ -48,3 +48,12 @@ Thumbs.db
 # Go 编译产物（桌面代理客户端）
 desktop-proxy/agentsoc-proxy.exe
 *.exe
+
+# 工具缓存
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+# 桌面代理产物
+desktop-proxy/output/
+desktop-proxy/*.exe
+desktop-proxy/certs/

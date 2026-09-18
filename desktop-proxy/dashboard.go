@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"bytes"
 	"log"
 	"net/http"
 	"os"
@@ -28,6 +29,7 @@ type Event struct {
 type Stats struct {
 	mu        sync.RWMutex
 	hostname  string
+	agentName string
 	mode      string
 	upstream  string
 	startTime time.Time
@@ -43,6 +45,12 @@ type Stats struct {
 	connLatency int64 // ms
 	connLast    time.Time
 	connErr     string
+	// 中心上报状态（供看板展示「是否已接入中心总览」）
+	reportEnabled   bool
+	reportOK        bool
+	reportFail      int
+	reportInterval  int // 秒
+	centerFleetURL  string
 }
 
 const maxRecent = 200
@@ -55,11 +63,16 @@ func NewStats(cfg *Config) *Stats {
 	}
 	s := &Stats{
 		hostname:  host,
+		agentName: cfg.AgentName,
 		mode:      cfg.Mode,
 		upstream:  cfg.Upstream,
 		startTime: time.Now(),
 	}
 	go s.healthLoop()
+	// 向中心上报心跳（供多终端总览看板统计在线数量）；间隔 <=0 则关闭
+	if cfg.ReportIntervalSec > 0 {
+		go s.reportLoop(time.Duration(cfg.ReportIntervalSec)*time.Second, cfg.APIKey)
+	}
 	return s
 }
 
@@ -212,11 +225,14 @@ func parseAgentsentry(body []byte) *agentsentryInfo {
 // Snapshot 是 /api 返回的 JSON 结构。
 type Snapshot struct {
 	Hostname   string `json:"hostname"`
+	AgentID    string `json:"agent_id"`
+	AgentName  string `json:"agent_name,omitempty"`
 	Mode       string `json:"mode"`
 	Upstream   string `json:"upstream"`
 	Version    string `json:"version"`
 	StartTime  int64  `json:"start_time"`
 	Now        int64  `json:"now"`
+	UptimeSec  int64  `json:"uptime_sec"`
 	Connectivity struct {
 		OK        bool  `json:"ok"`
 		LatencyMs int64 `json:"latency_ms"`
@@ -230,7 +246,13 @@ type Snapshot struct {
 		Errors  int `json:"errors"`
 	} `json:"stats"`
 	Recent []*Event `json:"recent"`
-}
+	Report struct {
+		Enabled     bool   `json:"enabled"`
+		OK          bool   `json:"ok"`
+		FailStreak  int    `json:"fail_streak"`
+		IntervalSec int    `json:"interval_sec"`
+		CenterURL   string `json:"center_url,omitempty"`
+	} `json:"report"`}
 
 // Snapshot 生成当前状态快照（recent 按时间倒序）。
 func (s *Stats) Snapshot() *Snapshot {
@@ -238,11 +260,14 @@ func (s *Stats) Snapshot() *Snapshot {
 	defer s.mu.RUnlock()
 	ss := &Snapshot{
 		Hostname:  s.hostname,
+		AgentID:   s.hostname,
+		AgentName: s.agentName,
 		Mode:      s.mode,
 		Upstream:  s.upstream,
 		Version:   version,
 		StartTime: s.startTime.UnixMilli(),
 		Now:       time.Now().UnixMilli(),
+		UptimeSec: int64(time.Since(s.startTime).Seconds()),
 	}
 	ss.Connectivity.OK = s.connOK
 	ss.Connectivity.LatencyMs = s.connLatency
@@ -252,6 +277,11 @@ func (s *Stats) Snapshot() *Snapshot {
 	ss.Stats.Blocked = s.blocked
 	ss.Stats.Passed = s.passed
 	ss.Stats.Errors = s.errs
+	ss.Report.Enabled = s.reportEnabled
+	ss.Report.OK = s.reportOK
+	ss.Report.FailStreak = s.reportFail
+	ss.Report.IntervalSec = s.reportInterval
+	ss.Report.CenterURL = s.centerFleetURL
 	n := len(s.recent)
 	ss.Recent = make([]*Event, n)
 	for i := 0; i < n; i++ {
@@ -283,9 +313,67 @@ func (s *Stats) ServeDashboard(addr string) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(loadDashboardHTML())
+		w.Write(injectFleetBar(loadDashboardHTML()))
 	})
 	log.Printf("看板已启动: http://%s/", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Printf("看板启动失败: %v", err)
 	}
+}
+
+// fleetBarScript 注入到看板页面末尾：展示「是否已接入中心总览」并给出跳转入口。
+// 之所以运行时注入而不是改 dashboard.html：该文件在部分环境会被加密，不便直接编辑。
+const fleetBarScript = `
+<style>
+.fleetbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#fff;
+  border:1px solid #e6eaf1;border-radius:12px;padding:10px 16px;margin:0 0 16px;
+  font-size:13px;box-shadow:0 1px 3px rgba(20,30,50,.08)}
+.fb-dot{width:10px;height:10px;border-radius:50%;background:#c3cad6;flex:none}
+.fleetbar.ok .fb-dot{background:#1f9d55;box-shadow:0 0 0 3px rgba(31,157,85,.15)}
+.fleetbar.bad .fb-dot{background:#d9352b;box-shadow:0 0 0 3px rgba(217,53,43,.15)}
+.fb-txt{color:#6b7686}
+.fleetbar.bad .fb-txt{color:#d9352b;font-weight:600}
+.fb-link{margin-left:auto;color:#2563eb;text-decoration:none;font-weight:600;font-size:13px}
+.fb-link:hover{text-decoration:underline}
+</style>
+<script>
+(function(){
+  var wrap=document.querySelector(".wrap")||document.body;
+  var bar=document.createElement("div");
+  bar.id="fleetbar";bar.className="fleetbar";
+  bar.innerHTML='<span class="fb-dot"></span><span class="fb-txt">正在检测中心连接…</span>'
+    + '<a class="fb-link" target="_blank" rel="noopener">查看全部终端 →</a>';
+  var hdr=wrap.querySelector("header");
+  if(hdr&&hdr.nextSibling){wrap.insertBefore(bar,hdr.nextSibling);}else{wrap.appendChild(bar);}
+  var link=bar.querySelector(".fb-link");
+  function refresh(){
+    fetch("/api",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
+      var rp=d.report||{};
+      bar.className="fleetbar "+(rp.enabled?(rp.ok?"ok":"bad"):"off");
+      var t;
+      if(!rp.enabled){t="未接入中心：本机上报已关闭（只显示本机看板）";}
+      else if(rp.ok){t="已接入中心 · 每 "+(rp.interval_sec||60)+"s 上报 · 本机已出现在总览中";}
+      else{t="中心上报失败 "+(rp.fail_streak||0)+" 次 · 本机暂未出现在总览";}
+      bar.querySelector(".fb-txt").textContent=t;
+      if(rp.center_url){link.href=rp.center_url;link.style.display="";}
+      else{link.style.display="none";}
+    }).catch(function(){});
+  }
+  refresh();setInterval(refresh,5000);
+})();
+</script>
+`
+
+// injectFleetBar 把状态栏脚本插到 </body> 之前；找不到就直接追加。
+func injectFleetBar(html []byte) []byte {
+	script := []byte(fleetBarScript)
+	idx := bytes.LastIndex(html, []byte("</body>"))
+	if idx < 0 {
+		return append(append([]byte{}, html...), script...)
+	}
+	out := make([]byte, 0, len(html)+len(script))
+	out = append(out, html[:idx]...)
+	out = append(out, script...)
+	out = append(out, html[idx:]...)
+	return out
 }

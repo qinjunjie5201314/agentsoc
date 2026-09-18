@@ -18,7 +18,7 @@ from app.audit.models import (
 )
 from app.audit.replay import TimelineEvent, build_timeline
 from app.audit.reports import build_report, export_csv, export_json
-from app.audit.routes import create_audit_router, create_audit_status_router
+from app.audit.routes import create_audit_router
 
 __all__ = [
     "AuditEventType",
@@ -34,7 +34,6 @@ __all__ = [
     "build_report",
     "build_timeline",
     "create_audit_router",
-    "create_audit_status_router",
     "export_csv",
     "export_json",
 ]
