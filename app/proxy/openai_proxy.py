@@ -25,6 +25,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.config import settings
 from app.audit.models import RiskAction, RiskLevel, SourceType
 from app.detection.isolate import tag_messages
 from app.detection.normalize import normalize
@@ -250,6 +251,12 @@ def create_proxy_router(
                 stream=bool(raw_body.get("stream", False)),
                 tools=raw_body.get("tools"),
             )
+
+        # 兜底：客户端/demo 页可能传占位 model（如 "gpt-4o-mini"），
+        # 但真实后端只认配置的 LLM_MODEL（如 deepseek-v4-pro）。
+        # 这里把 model 归一化到 settings.llm_model，避免透传错模型导致上游 503。
+        if not req.model or req.model == "gpt-4o-mini":
+            req.model = settings.llm_model
 
         messages = req.messages or []
         if not messages:
