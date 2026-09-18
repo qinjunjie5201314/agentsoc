@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+
+import httpx
 import time
 import uuid
 from typing import Any
@@ -52,6 +54,7 @@ ERR_BLOCKED = "agentsentry_request_blocked"
 ERR_REQUIRES_CONFIRM = "agentsentry_request_requires_confirm"
 ERR_TOOL_BLOCKED = "agentsentry_tool_call_blocked"
 ERR_BAD_REQUEST = "invalid_request_error"
+ERR_UPSTREAM = "agentsentry_upstream_error"
 
 
 def _l1_preview(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -132,6 +135,34 @@ def _block_response(result, reason_code: str, http_status: int) -> JSONResponse:
         },
     }
     return JSONResponse(status_code=http_status, content=body)
+
+
+def _upstream_error_response(exc: Exception, model: str) -> JSONResponse:
+    """把上游 LLM 透传失败转成结构化 JSON（HTTP 502），避免裸 500。
+
+    exc 通常是 httpx.HTTPStatusError（上游非 2xx，如 503）或
+    httpx.TransportError（连接失败/超时）。返回 OpenAI 风格错误体，
+    前端可正常 JSON 解析并友好提示，而不是 "Internal Server Error"。
+    """
+    logger.error("上游 LLM 透传失败 · model=%s · %s: %s", model, type(exc).__name__, exc)
+    detail = str(exc)
+    if len(detail) > 300:
+        detail = detail[:300] + "..."
+    body = {
+        "error": {
+            "code": ERR_UPSTREAM,
+            "message": "上游 LLM 服务暂不可用（透传失败）",
+            "type": "server_error",
+            "param": None,
+            "upstream_error": detail,
+        },
+        "agentsentry": {
+            "action": "allow",
+            "risk_level": "low",
+            "upstream_unavailable": True,
+        },
+    }
+    return JSONResponse(status_code=502, content=body)
 
 
 def _process_tool_calls(
@@ -306,7 +337,11 @@ def create_proxy_router(
         # ---- allow：透传到 LLM 后端（mock 或内网网关） ----
         # 先探测本轮是否会产生工具调用（mock 是确定性的，真实后端此探测会多一次调用；
         # 试点阶段为保持 C2 工具拦截逻辑一致，沿用探测，M2 再优化为流式增量）
-        probe = llm_backend.chat_completion(model=req.model, messages=messages, tools=req.tools)
+        try:
+            probe = llm_backend.chat_completion(model=req.model, messages=messages, tools=req.tools)
+        except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+            # 上游 LLM 暂不可用（503/超时/连接失败）→ 优雅降级，返回结构化 502
+            return _upstream_error_response(exc, req.model)
         has_tool_calls = bool(extract_tool_calls(probe, protocol="openai"))
 
         if auto_handle_tools and has_tool_calls:
