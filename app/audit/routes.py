@@ -24,16 +24,44 @@ from app.audit.reports import build_report, export_csv, export_json
 from app.db import get_db
 
 
+def _audit_status(audit: AuditLogger | None) -> dict[str, Any]:
+    """审计落库器存活/计数快照（无敏感数据，供存活探针 / demo 页读取）。"""
+    if audit is None:
+        return {"enabled": False, "running": False, "reason": "audit logger 未注入"}
+    return audit.stats
+
+
+def create_audit_status_router(audit: AuditLogger | None = None) -> APIRouter:
+    """独立的审计状态路由（**不鉴权**）。
+
+    仅暴露 ``/v1/audit/status``（enabled/running/queue_size/written/dropped），
+    不含任何敏感日志内容，可安全开放给前端存活探针与 demo 页轮询，避免因
+    ``API_KEY`` 鉴权导致页面把「401」误判为「落库已停」。
+    """
+    router = APIRouter(tags=["audit"])
+
+    @router.get("/v1/audit/status")
+    async def audit_status() -> dict[str, Any]:
+        return _audit_status(audit)
+
+    return router
+
+
 def create_audit_router(
     *,
     audit: AuditLogger | None = None,
     db_dep: Callable | None = None,
+    include_status: bool = True,
 ) -> APIRouter:
     """创建审计查询路由。
 
     Args:
         audit: 审计落库器（用于 /v1/audit/status）。
         db_dep: 查询用的 Session 依赖（默认 ``app.db.get_db``；测试注入临时库）。
+        include_status: 是否在本 router 内注册 ``/v1/audit/status``。
+            status 只暴露存活/计数、无敏感数据，通常应**单独挂不鉴权的路由**（供
+            demo 页 / 存活探针读取），因此默认为 True，但生产可设为 False 后由
+            ``create_audit_status_router`` 另行注册。
     """
     router = APIRouter(tags=["audit"])
     _audit = audit
@@ -41,11 +69,11 @@ def create_audit_router(
 
     # ---- 状态 ----
 
-    @router.get("/v1/audit/status")
-    async def audit_status() -> dict[str, Any]:
-        if _audit is None:
-            return {"enabled": False, "running": False, "reason": "audit logger 未注入"}
-        return _audit.stats
+    if include_status:
+
+        @router.get("/v1/audit/status")
+        async def audit_status() -> dict[str, Any]:
+            return _audit_status(_audit)
 
     # ---- 风险事件 ----
 

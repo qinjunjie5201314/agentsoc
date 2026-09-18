@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Request
 
 from app import __version__
-from app.audit import AuditLogger, create_audit_router
+from app.audit import AuditLogger, create_audit_router, create_audit_status_router
 from app.config import settings
 from app.detection.classifier import get_classifier
 from app.detection.pipeline import DetectionPipeline
@@ -234,7 +234,13 @@ app.include_router(
     create_nl_router(registry=_registry, policy_dir=_registry.policy_dir),
     dependencies=[Depends(require_admin)],
 )
-app.include_router(create_audit_router(audit=_audit), dependencies=[Depends(require_admin)])
+app.include_router(
+    create_audit_router(audit=_audit, include_status=False),
+    dependencies=[Depends(require_admin)],
+)
+# /v1/audit/status 仅暴露存活/计数、无敏感数据，单独挂**不鉴权**路由，
+# 供 demo 页 / 存活探针轮询，避免 API_KEY 鉴权把 401 误判成「落库已停」。
+app.include_router(create_audit_status_router(audit=_audit))
 app.include_router(
     create_approval_router(registry=_registry),
     dependencies=[Depends(require_admin)],
