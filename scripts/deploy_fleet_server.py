@@ -3,8 +3,8 @@
 
 在服务器项目目录（如 /root/agentsoc）下执行：
 
-    python deploy_fleet_server.py              # 只落地代码
-    python deploy_fleet_server.py --rebuild    # 落地并重建 api 容器
+    python deploy_fleet_server.py              # 落地代码 + 重建 api 容器 + 验证端点
+    python deploy_fleet_server.py --no-rebuild # 仅落地代码（不重建容器，手动 build/up）
 
 设计：
   - 只做增量：新增 app/fleet/ 四个文件 + 在 main.py / config.py 精准插入，
@@ -20,7 +20,13 @@ import os
 import sys
 
 NL = chr(10)
+# ROOT = 项目根目录。脚本既可能放在项目根，也可能放在 scripts/ 子目录，
+# 必须定位到真正含 app/ 的目录，否则会把文件写到 scripts/app/ 而改不到镜像里的代码。
 ROOT = os.path.dirname(os.path.abspath(__file__))
+if not os.path.isdir(os.path.join(ROOT, "app")):
+    parent = os.path.dirname(ROOT)
+    if os.path.isdir(os.path.join(parent, "app")):
+        ROOT = parent
 
 FILES = {
     "app/fleet/__init__.py": (
@@ -601,51 +607,258 @@ def write_files():
         print("[写入] %s (%d bytes)" % (rel, len(data)))
 
 
-def patch_file(path, anchor, addition, label):
+def _read(path):
+    with open(path, "rb") as h:
+        return h.read()
+
+
+def _write(path, data):
+    with open(path, "wb") as h:
+        h.write(data)
+
+
+def is_integrated(main_py):
+    """main.py 是否已包含 Fleet 集成（导入 + 单例 + 路由挂载）。"""
+    try:
+        raw = _read(main_py).decode("utf-8")
+    except OSError:
+        return False
+    return ("create_fleet_router" in raw) and ("_fleet = FleetRegistry" in raw)
+
+
+def find_insert_pos(raw, anchors):
+    """返回首个匹配锚点的行索引（0-based）；都不匹配返回 None。
+
+    锚点规则：以 '^' 开头按正则匹配整行，否则按子串包含匹配。
+    """
+    import re
+    lines = raw.split("\n")
+    for anc in anchors:
+        for i, line in enumerate(lines):
+            if anc.startswith("^"):
+                if re.search(anc[1:], line):
+                    return i
+            elif anc in line:
+                return i
+    return None
+
+
+def insert_after(raw, anchors, block):
+    """在匹配锚点的行之后插入 block。返回 (新文本, 是否插入)。"""
+    pos = find_insert_pos(raw, anchors)
+    if pos is None:
+        return raw, False
+    lines = raw.split("\n")
+    lines.insert(pos + 1, block.rstrip("\n"))
+    return "\n".join(lines), True
+
+
+def insert_before(raw, anchors, block):
+    """在匹配锚点的行之前插入 block。返回 (新文本, 是否插入)。"""
+    pos = find_insert_pos(raw, anchors)
+    if pos is None:
+        return raw, False
+    lines = raw.split("\n")
+    lines.insert(pos, block.rstrip("\n"))
+    return "\n".join(lines), True
+
+
+def try_git_pull():
+    """若服务器是 git 仓库，优先 git pull 获取已集成的 Fleet 代码（零锚点风险）。"""
+    if not os.path.isdir(os.path.join(ROOT, ".git")):
+        return False
+    print("检测到 .git，尝试 git pull（可忽略失败）...")
+    rc = os.system("git pull --ff-only")
+    if rc == 0:
+        print("[git] pull 成功，已获取最新代码")
+    else:
+        print("[git] pull 未执行/失败（将使用内嵌补丁）")
+    return rc == 0
+
+
+def patch_main():
+    path = os.path.join(ROOT, "app", "main.py")
     if not os.path.isfile(path):
-        print("[跳过] %s 文件不存在: %s" % (label, path))
+        print("[错误] 找不到 app/main.py: %s" % path)
         return False
-    handle = open(path, "rb")
-    raw = handle.read()
-    handle.close()
-    anchor_b = anchor.encode("utf-8")
-    add_b = addition.encode("utf-8")
-    if add_b in raw:
-        print("[跳过] %s（补丁已存在）" % label)
-        return True
-    if anchor_b not in raw:
-        print("[警告] %s 锚点未找到，未做修改 -> %s" % (label, path))
-        return False
-    raw = raw.replace(anchor_b, anchor_b + add_b, 1)
-    handle = open(path, "wb")
-    handle.write(raw)
-    handle.close()
-    print("[补丁] %s" % label)
+    raw = _read(path).decode("utf-8")
+
+    # 1) 导入 fleet
+    if "create_fleet_router" not in raw:
+        block = "from app.fleet import FleetRegistry, create_fleet_page_router, create_fleet_router\n"
+        new, ok = insert_after(
+            raw,
+            ["from app.detection.pipeline import DetectionPipeline",
+             "^from app\\.\\w+ import",
+             "^from fastapi import"],
+            block,
+        )
+        if not ok:
+            print("[错误] main.py 无法定位导入插入点，中止")
+            return False
+        raw = new
+        print("[补丁] main.py 导入 fleet 模块")
+
+    # 2) 单例 _fleet（紧随 _audit 之后）
+    if "_fleet = FleetRegistry" not in raw:
+        block = (
+            "\n"
+            "# ---- Fleet: 多终端总览（终端心跳上报驱动的内存表）----\n"
+            "_fleet = FleetRegistry(\n"
+            "    offline_after=settings.fleet_offline_after,\n"
+            "    report_interval=settings.fleet_report_interval,\n"
+            "    max_agents=settings.fleet_max_agents,\n"
+            ")\n"
+        )
+        new, ok = insert_after(raw, ["_audit = AuditLogger("], block)
+        if not ok:
+            print("[错误] main.py 无法定位 _fleet 单例插入点（缺少 _audit？），中止")
+            return False
+        raw = new
+        print("[补丁] main.py 注册 _fleet 单例")
+
+    # 3) 路由挂载（放在 `if __name__ == "__main__":` 之前，保证进程启动时挂载）
+    if "create_fleet_router(_fleet)" not in raw:
+        block = (
+            "\n"
+            "# ---- Fleet: 多终端总览看板（终端上报 -> 内存表 -> 总览页 + 终端详情）----\n"
+            "if settings.fleet_enabled:\n"
+            "    app.include_router(create_fleet_router(_fleet))\n"
+            "    app.include_router(create_fleet_page_router())\n"
+        )
+        new, ok = insert_before(raw, ['^if __name__ =='], block)
+        if not ok:
+            print("[错误] main.py 无法定位路由挂载插入点（缺少 if __name__），中止")
+            return False
+        raw = new
+        print("[补丁] main.py 挂载 fleet 路由")
+
+    _write(path, raw.encode("utf-8"))
     return True
 
 
-def main():
-    write_files()
-    ok = True
-    main_py = os.path.join(ROOT, "app", "main.py")
-    cfg_py = os.path.join(ROOT, "app", "config.py")
-    ok = patch_file(main_py, MAIN_IMPORT_ANCHOR, MAIN_IMPORT_ADD, "main.py import") and ok
-    ok = patch_file(main_py, MAIN_SINGLETON_ANCHOR, MAIN_SINGLETON_ADD, "main.py 注册表单例") and ok
-    ok = patch_file(main_py, MAIN_MOUNT_ANCHOR, MAIN_MOUNT_ADD, "main.py 路由挂载") and ok
-    ok = patch_file(cfg_py, CFG_ANCHOR, CFG_ADD, "config.py fleet 配置") and ok
+def patch_config():
+    path = os.path.join(ROOT, "app", "config.py")
+    if not os.path.isfile(path):
+        print("[错误] 找不到 app/config.py: %s" % path)
+        return False
+    raw = _read(path).decode("utf-8")
+    if "fleet_enabled" in raw:
+        print("[跳过] config.py 已含 fleet 配置")
+        return True
+    block = (
+        "\n"
+        "    # ---- Fleet：多终端总览看板（桌面代理心跳上报驱动）----\n"
+        "    fleet_enabled: bool = True\n"
+        "    fleet_report_interval: int = 60\n"
+        "    fleet_offline_after: int = 180\n"
+        "    fleet_max_agents: int = 2000\n"
+    )
+    new, ok = insert_after(
+        raw,
+        ["audit_retention_days: int = 90",
+         "audit_enabled: bool = True",
+         "^class Settings\\(BaseSettings\\):"],
+        block,
+    )
+    if not ok:
+        print("[错误] config.py 无法定位 fleet 配置插入点，中止")
+        return False
+    _write(path, new.encode("utf-8"))
+    print("[补丁] config.py 增加 fleet 配置")
+    return True
 
-    if "--rebuild" in sys.argv:
+
+def check_syntax():
+    ok = True
+    for rel in ("app/main.py", "app/config.py"):
+        path = os.path.join(ROOT, rel)
+        try:
+            import ast
+            ast.parse(_read(path), filename=rel)
+        except SyntaxError as exc:
+            print("[语法错误] %s: %s" % (rel, exc))
+            ok = False
+    return ok
+
+
+def check_curl(path, expect):
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+             "http://127.0.0.1:8000" + path],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print("  验证 %s: 无法执行 curl (%s)" % (path, exc))
+        return
+    code = out.stdout.strip()
+    flag = "OK" if code == str(expect) else "FAIL"
+    print("  验证 %s -> HTTP %s [%s, 期望 %d]" % (path, code or "?", flag, expect))
+
+
+def docker_build_and_verify(rebuild):
+    if not rebuild:
         print("")
-        print("重建 api 容器 ...")
-        rc = os.system("docker compose build api && docker compose up -d --force-recreate api")
-        print("重建返回码: %d" % rc)
+        print("未指定 --no-rebuild 之外的跳过；请手动执行：")
+        print("  docker compose build api && docker compose up -d --force-recreate api")
+        return
+    print("")
+    print("重建 api 容器 ...")
+    rc = os.system("docker compose build api")
+    if rc != 0:
+        print("[错误] docker compose build api 失败（返回码 %d）" % rc)
+        return
+    rc = os.system("docker compose up -d --force-recreate api")
+    if rc != 0:
+        print("[错误] docker compose up 失败（返回码 %d）" % rc)
+        return
+    import time
+    print("等待服务就绪 ...")
+    up = False
+    for _ in range(25):
+        time.sleep(2)
+        if os.system("curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1") == 0:
+            up = True
+            break
+    if not up:
+        print("[警告] 服务未就绪（/health 无响应），请检查：docker compose logs api")
+    print("")
+    print("端点验证：")
+    check_curl("/fleet", 200)
+    check_curl("/v1/fleet/summary", 200)
+
+
+def main():
+    rebuild = "--no-rebuild" not in sys.argv  # 默认重建容器；--no-rebuild 仅落地代码不重建
+
+    # 1) 优先 git pull（若服务器是 git 仓库，直接获取已集成代码，最稳）
+    try_git_pull()
+
+    # 2) 是否已集成？已集成则跳过写入/补丁，直接重建
+    main_py = os.path.join(ROOT, "app", "main.py")
+    if is_integrated(main_py):
+        print("[已集成] main.py 已包含 Fleet，跳过写入/补丁")
     else:
-        print("")
-        print("下一步执行：docker compose build api && docker compose up -d --force-recreate api")
+        write_files()
+        if not patch_main():
+            return 1
+        if not patch_config():
+            return 1
+
+    # 3) 语法自检
+    if not check_syntax():
+        print("[错误] 语法检查未通过，已停止；请检查上面的错误")
+        return 1
+
+    # 4) 重建并验证
+    docker_build_and_verify(rebuild)
 
     print("")
     print("完成后访问：http://<服务器地址>:8000/fleet")
-    return 0 if ok else 1
+    print("终端上报接口：POST http://<服务器地址>:8000/v1/fleet/report")
+    return 0
 
 
 if __name__ == "__main__":
